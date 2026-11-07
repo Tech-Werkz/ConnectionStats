@@ -26,6 +26,28 @@ module.exports.connectionstats = function (parent) {
     obj.tracker = new obj.activity.Tracker(300);
     obj.perms = new (require(__dirname + '/permissions.js').Permissions)(obj.meshServer);
 
+    obj.registerPluginPermissions = function () {
+        try {
+            if (!obj.meshServer || !obj.meshServer.pluginHandler || typeof obj.meshServer.pluginHandler.registerPermissions != 'function') return;
+            obj.meshServer.pluginHandler.registerPermissions('connectionstats', {
+                view: { title: 'View Connection Stats', desc: 'View connection statistics, exports, and device tabs.', default: 'allowed' },
+                manage: { title: 'Manage Connection Stats', desc: 'Edit settings, import historical data, and trigger backfills.', default: 'denied' }
+            });
+        } catch (e) { }
+    };
+
+    obj.hasPluginPermission = function (user, permission, nodeid, meshid) {
+        if (!user) return false;
+        if (obj.isAdmin(user)) return true;
+        try {
+            var ph = obj.meshServer && obj.meshServer.pluginHandler;
+            if (ph && typeof ph.checkPluginPermission == 'function') return !!ph.checkPluginPermission(user, 'connectionstats', permission, nodeid, meshid);
+        } catch (e) { }
+        return false;
+    };
+    obj.canView = function (user, nodeid, meshid) { return obj.hasPluginPermission(user, 'view', nodeid, meshid); };
+    obj.canManage = function (user, nodeid, meshid) { return obj.hasPluginPermission(user, 'manage', nodeid, meshid); };
+
     var PLUGIN_VERSION = (function () { try { return require(__dirname + '/config.json').version; } catch (e) { return '0.0.0'; } })();
 
     // ------------------------------------------------------------------
@@ -278,6 +300,7 @@ module.exports.connectionstats = function (parent) {
     //  Startup
     // ------------------------------------------------------------------
     obj.server_startup = function () {
+        obj.registerPluginPermissions();
         obj.meshServer.pluginHandler.connectionstats_db = require(__dirname + '/db.js').CreateDB(obj.meshServer);
         obj.db = obj.meshServer.pluginHandler.connectionstats_db;
         obj.pairer = new obj.events.Pairer();
@@ -621,6 +644,7 @@ module.exports.connectionstats = function (parent) {
     // the oldest session the user may see under the current scope, types and users: the "All"
     // preset starts there
     obj.apiRange = function (user, q) {
+        if (!obj.canView(user)) return Promise.resolve({ error: 'Permission denied', status: 403 });
         var p = obj.parseQuery(q);
         p.start = 0; p.end = Date.now();
         return obj.perms.filterFor(user, p).then(function (f) {
@@ -630,6 +654,7 @@ module.exports.connectionstats = function (parent) {
     };
 
     obj.apiQuery = function (user, q) {
+        if (!obj.canView(user)) return Promise.resolve({ error: 'Permission denied', status: 403 });
         var p = obj.parseQuery(q);
         return obj.perms.filterFor(user, p).then(function (f) {
             if (f == null) return { error: 'Not allowed to see this scope', status: 403 };
@@ -651,6 +676,7 @@ module.exports.connectionstats = function (parent) {
     };
 
     obj.apiSessions = function (user, q) {
+        if (!obj.canView(user)) return Promise.resolve({ error: 'Permission denied', status: 403 });
         var p = obj.parseQuery(q);
         return obj.perms.filterFor(user, p).then(function (f) {
             if (f == null) return { error: 'Not allowed to see this scope', status: 403 };
@@ -692,6 +718,7 @@ module.exports.connectionstats = function (parent) {
 
     // groups, devices and admins the user may pick from
     obj.apiMeta = function (user) {
+        if (!obj.canView(user)) return Promise.resolve({ error: 'Permission denied', status: 403 });
         return obj.perms.visibleScope(user).then(function (vis) {
             var meshes = obj.meshServer.webserver.meshes || {}, groups = [], devices = [], users = [];
             var domain = user.domain || '';
@@ -736,6 +763,7 @@ module.exports.connectionstats = function (parent) {
     // Streams the filtered sessions (or the bucket totals) as CSV or JSON under the same
     // permission check as the page. Sessions are read in pages of 500 so a year never sits in memory.
     obj.apiExport = function (req, res, user) {
+        if (!obj.canView(user)) { res.status(403).json({ error: 'Permission denied' }); return Promise.resolve(); }
         var q = req.query, p = obj.parseQuery(q);
         var format = (q.format == 'json') ? 'json' : 'csv', what = (q.what == 'buckets') ? 'buckets' : 'sessions';
         var meta = { scope: p.scope, scopeName: (typeof q.scopename == 'string') ? q.scopename.substring(0, 60) : null, start: p.start, end: p.end, bucket: p.bucket, tz: p.tz, user: user.name || user._id, version: PLUGIN_VERSION, types: p.types, users: p.userids, guests: p.includeGuests, now: Date.now() };
@@ -782,10 +810,10 @@ module.exports.connectionstats = function (parent) {
         else if (api == 'kimai-device') work = obj.kimai.device.state(user, req.query.nodeid);
         else if (api == 'kimai-destinations') work = obj.kimai.destinations(user, req.query.kind, req.query.parent);
         else if (api == 'query') work = obj.apiQuery(user, req.query);
-        else if (api == 'settings') work = Promise.resolve(obj.isAdmin(user) ? { settings: obj.settings, backfill: obj.backfillInfo(), types: obj.events.TYPES, version: PLUGIN_VERSION } : { error: 'Site administrators only', status: 403 });
-        else if (api == 'backfill') work = Promise.resolve(obj.isAdmin(user) ? obj.backfillInfo() : { error: 'Site administrators only', status: 403 });
-        else if (api == 'restore') work = Promise.resolve(obj.isAdmin(user) ? obj.restoreInfo() : { error: 'Site administrators only', status: 403 });
-        else if (api == 'backups') work = obj.isAdmin(user) ? obj.listBackups() : Promise.resolve({ error: 'Site administrators only', status: 403 });
+        else if (api == 'settings') work = Promise.resolve(obj.canManage(user) ? { settings: obj.settings, backfill: obj.backfillInfo(), types: obj.events.TYPES, version: PLUGIN_VERSION } : { error: 'Permission denied', status: 403 });
+        else if (api == 'backfill') work = Promise.resolve(obj.canManage(user) ? obj.backfillInfo() : { error: 'Permission denied', status: 403 });
+        else if (api == 'restore') work = Promise.resolve(obj.canManage(user) ? obj.restoreInfo() : { error: 'Permission denied', status: 403 });
+        else if (api == 'backups') work = obj.canManage(user) ? obj.listBackups() : Promise.resolve({ error: 'Permission denied', status: 403 });
         else if (api == 'sessions') work = obj.apiSessions(user, req.query);
         else if (api == 'seq') work = Promise.resolve({ seq: obj.seq });
         else if (api == 'meta') work = obj.apiMeta(user);
@@ -825,7 +853,7 @@ module.exports.connectionstats = function (parent) {
     var pageCache = null;
     obj.handleAdminReq = function (req, res, user) {
         if (obj.db == null) { res.status(503).send('Connection Stats is still starting'); return; }
-        if (!obj.isAdmin(user)) { res.status(403).send('Connection Stats is available to site administrators only'); return; }
+        if (!obj.isAdmin(user) && !obj.canView(user)) { res.status(403).send('Permission denied'); return; }
         if (req.query.api != null) { obj.handleApi(req, res, user); return; }
         if (req.query.file != null) { obj.serveFile(req, res); return; }
         var boot = { view: 'full', night: (req.query.night == '1'), nightExplicit: (req.query.night == '1' || req.query.night == '0'), version: PLUGIN_VERSION, user: user._id, isAdmin: obj.isAdmin(user) };
@@ -849,7 +877,7 @@ module.exports.connectionstats = function (parent) {
 
     // Settings and backfill changes come as form posts from the settings page. Site admins only.
     obj.handleAdminPostReq = function (req, res, user) {
-        if (!obj.isAdmin(user)) { res.sendStatus(403); return; }
+        if (!obj.isAdmin(user) && !obj.canManage(user)) { res.sendStatus(403); return; }
         if (req.body && req.body.action === 'kimai') {
             res.set('Cache-Control', 'no-store');
             if (!user || !obj.kimai || req.body.csrf !== obj.kimai.nonce(user)) { res.status(403).json({ error: 'Invalid request token; reload the Kimai page' }); return; }
@@ -858,7 +886,7 @@ module.exports.connectionstats = function (parent) {
             obj.kimai.action(user, data).then(function (r) { res.json(r); }, function (e) { res.status(400).json({ error: e.message }); });
             return;
         }
-        if (!obj.isAdmin(user)) { res.sendStatus(401); return; }
+        if (!obj.isAdmin(user) && !obj.canManage(user)) { res.sendStatus(401); return; }
         if (obj.db == null) { res.status(503).json({ ok: false, error: 'Connection Stats is still starting' }); return; }
         if (/^multipart\/form-data/i.test(String(req.headers['content-type'] || ''))) { obj.handleUpload(req, res); return; }
         if (req.body == null) { res.status(400).json({ ok: false, error: 'No form data' }); return; }
