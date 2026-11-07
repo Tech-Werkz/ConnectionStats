@@ -247,7 +247,8 @@ class Device {
             const s = await this.s.state(user);
             const d = init(s);
             const global = (await this.s.db.getSetting('kimai:server')) || {};
-            const connected = !!s.token && s.server === global.url;
+            const enabled = global.enabled !== false;
+            const connected = enabled && !!s.token && s.server === global.url;
             const docs = await this.s.sessions(user, {
                 start: d.since,
                 end: Date.now() + 1000,
@@ -268,6 +269,7 @@ class Device {
             );
             return {
                 csrf: this.s.nonce(user),
+                enabled,
                 connected,
                 url: global.url || '',
                 timezone: s.tz || 'UTC',

@@ -1129,6 +1129,11 @@
         );
     }
     function updateChips() {
+        var off = state.enabled === false;
+        document.querySelectorAll('.cs-kd-strip').forEach(function (w) {
+            w.style.display = off ? 'none' : '';
+        });
+        if (off) return;
         var count = (state.reviews || []).length;
         document.querySelectorAll('.cs-kd-chip').forEach(function (b) {
             var a = runningAllocation(b.connectionType),
@@ -1267,6 +1272,10 @@
                 receivedAt = Date.now();
                 node = next;
                 updateChips();
+                if (state.enabled === false) {
+                    if (panel && !panel.hidden) panel.hidden = true;
+                    return;
+                }
                 updateEditorStatus();
                 if (!force) prompts();
             } catch (e) {

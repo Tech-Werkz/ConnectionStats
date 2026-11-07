@@ -367,7 +367,21 @@
             h +=
                 '<form data-form="server" class="km-panel"><label>Kimai server URL ' +
                 input('url', state.url, 'url') +
-                '</label> <button>Save server</button></form>';
+                '</label> <label><input name="enabled" type="checkbox"' +
+                (state.enabled !== false ? ' checked' : '') +
+                '> Enable Kimai integration (account login, device controls and sync)</label> <button>Save server</button></form>';
+        if (state.enabled === false) {
+            h +=
+                '<p class="km-panel" role="status">The Kimai integration is disabled by a site administrator.' +
+                (boot.isAdmin ? ' Tick “Enable Kimai integration” above and save to turn it back on.' : '') +
+                '</p>';
+            root.innerHTML = h;
+            showFeedback();
+            root.querySelectorAll('button').forEach(function (b) {
+                b.disabled = busy;
+            });
+            return;
+        }
         h +=
             '<form data-form="connect" class="km-panel"><h2>My connection</h2><p>' +
             esc(state.url || 'A site administrator must configure the Kimai server URL.') +
@@ -574,7 +588,7 @@
             op = f.dataset.form;
         run(
             async function () {
-                if (op === 'server') await post({ op: op, url: fd.get('url') });
+                if (op === 'server') await post({ op: op, url: fd.get('url'), enabled: fd.get('enabled') === 'on' });
                 if (op === 'connect') {
                     var token = fd.get('token');
                     f.elements.token.value = '';

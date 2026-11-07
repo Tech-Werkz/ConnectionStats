@@ -36,6 +36,7 @@ module.exports.connectionstats = function (parent) {
     obj.exports = [
         'onWebUIStartupEnd',
         'onDeviceRefreshEnd',
+        'csIsAdmin',
         'csNight',
         'csTabUrl',
         'csEnsureTab',
@@ -51,8 +52,18 @@ module.exports.connectionstats = function (parent) {
 
     // Runs once when the web UI has loaded: keep embedded pages in step with night mode and
     // listen for their size reports.
+    // Browser side: the plugin is for site administrators only, so nothing is registered for others.
+    // (The server enforces the same rule; this only keeps the tab and toolbar chips from showing.)
+    obj.csIsAdmin = function () {
+        try {
+            var s = (typeof userinfo != 'undefined' && userinfo) ? userinfo.siteadmin : null;
+            return (s === 0xFFFFFFFF || s === -1);
+        } catch (e) { return false; }
+    };
+
     obj.onWebUIStartupEnd = function () {
         try {
+            if (!pluginHandler.connectionstats.csIsAdmin()) return;
             if (window.__csStarted) return; window.__csStarted = true;
             window.addEventListener('message', function (ev) { pluginHandler.connectionstats.csOnMessage(ev); });
             window.addEventListener('resize', function () { pluginHandler.connectionstats.csFitFrame(); });
@@ -204,6 +215,7 @@ module.exports.connectionstats = function (parent) {
     obj.onDeviceRefreshEnd = function (nodeid, panel, refresh, event) {
         try {
             if (typeof currentNode == 'undefined' || currentNode == null) return;
+            if (!pluginHandler.connectionstats.csIsAdmin()) return;
             pluginHandler.registerPluginTab({ tabId: 'pluginConnectionStats', tabTitle: 'Connection Stats' });
             pluginHandler.connectionstats.csEnsureTab(currentNode._id);
             if (window.CSDevice) window.CSDevice.refresh();
@@ -575,7 +587,8 @@ module.exports.connectionstats = function (parent) {
         }
     };
 
-    obj.isAdmin = function (user) { return (user != null) && (user.siteadmin == 0xFFFFFFFF); };
+    var FULLRIGHTS = 0xFFFFFFFF;
+    obj.isAdmin = function (user) { return (user != null) && (user.siteadmin == FULLRIGHTS); };
 
     // ------------------------------------------------------------------
     //  JSON API used by the dashboard page: GET /pluginadmin.ashx?pin=connectionstats&api=...
@@ -706,11 +719,14 @@ module.exports.connectionstats = function (parent) {
                     groups.sort(function (a, b) { return a.name.localeCompare(b.name); });
                     devices.sort(function (a, b) { return a.name.localeCompare(b.name); });
                     users.sort(function (a, b) { return a.name.localeCompare(b.name); });
-                    resolve({
-                        groups: groups, devices: devices, users: users, canSeeUsers: (vis.userids == 'all'), isAdmin: obj.isAdmin(user),
-                        me: { id: user._id, name: user.name || user._id }, types: obj.events.TYPES,
-                        settings: { activity: obj.settings ? obj.settings.activity : null, tz: obj.settings ? obj.settings.tz : '' },
-                        version: PLUGIN_VERSION
+                    (obj.kimai ? obj.kimai.enabled() : Promise.resolve(false)).catch(function () { return true; }).then(function (kimaiEnabled) {
+                        resolve({
+                            groups: groups, devices: devices, users: users, canSeeUsers: (vis.userids == 'all'), isAdmin: obj.isAdmin(user),
+                            me: { id: user._id, name: user.name || user._id }, types: obj.events.TYPES,
+                            settings: { activity: obj.settings ? obj.settings.activity : null, tz: obj.settings ? obj.settings.tz : '' },
+                            kimaiEnabled: kimaiEnabled,
+                            version: PLUGIN_VERSION
+                        });
                     });
                 });
             });
@@ -809,6 +825,7 @@ module.exports.connectionstats = function (parent) {
     var pageCache = null;
     obj.handleAdminReq = function (req, res, user) {
         if (obj.db == null) { res.status(503).send('Connection Stats is still starting'); return; }
+        if (!obj.isAdmin(user)) { res.status(403).send('Connection Stats is available to site administrators only'); return; }
         if (req.query.api != null) { obj.handleApi(req, res, user); return; }
         if (req.query.file != null) { obj.serveFile(req, res); return; }
         var boot = { view: 'full', night: (req.query.night == '1'), nightExplicit: (req.query.night == '1' || req.query.night == '0'), version: PLUGIN_VERSION, user: user._id, isAdmin: obj.isAdmin(user) };
@@ -832,6 +849,7 @@ module.exports.connectionstats = function (parent) {
 
     // Settings and backfill changes come as form posts from the settings page. Site admins only.
     obj.handleAdminPostReq = function (req, res, user) {
+        if (!obj.isAdmin(user)) { res.sendStatus(403); return; }
         if (req.body && req.body.action === 'kimai') {
             res.set('Cache-Control', 'no-store');
             if (!user || !obj.kimai || req.body.csrf !== obj.kimai.nonce(user)) { res.status(403).json({ error: 'Invalid request token; reload the Kimai page' }); return; }

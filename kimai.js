@@ -419,6 +419,7 @@ class Service {
     }
     async client(s) {
         const global = await this.db.getSetting('kimai:server');
+        if (global && global.enabled === false) throw Error('The Kimai integration is disabled by an administrator');
         if (!global || !global.url || s.server !== global.url)
             throw Error('Connect your token to the configured Kimai server first');
         const c = this.clientFactory(global.url, this.vault.open(s.token));
@@ -448,12 +449,20 @@ class Service {
         }
         return n;
     }
+    // The administrator can switch the whole Kimai integration (account login, device controls,
+    // sync) off. A missing flag means enabled, so existing installs keep working.
+    async enabled() {
+        const g = await this.db.getSetting('kimai:server');
+        return !g || g.enabled !== false;
+    }
     async info(user) {
         const s = await this.state(user),
-            global = (await this.db.getSetting('kimai:server')) || {};
+            global = (await this.db.getSetting('kimai:server')) || {},
+            enabled = global.enabled !== false;
         return {
+            enabled,
             url: global.url || '',
-            connected: !!s.token && s.server === global.url,
+            connected: enabled && !!s.token && s.server === global.url,
             timezone: s.tz,
             automationError: s.automationError || null,
             account: s.account,
@@ -547,13 +556,21 @@ class Service {
         return this.serial(this.key(user), async () => {
             const s = await this.state(user),
                 op = input.op;
+            // While disabled only the admin switch and token removal remain available.
+            if (op !== 'server' && op !== 'disconnect' && !(await this.enabled()))
+                throw Error('The Kimai integration is disabled by an administrator');
             if (op === 'device') return this.device.action(user, s, input);
             if (op === 'server') {
                 if (!this.p.isAdmin(user)) throw Error('Site administrators only');
-                const url = String(input.url).replace(/\/+$/, '');
-                new Client(url, '');
-                await this.db.setSetting('kimai:server', { url });
-                return { ok: true };
+                const prev = (await this.db.getSetting('kimai:server')) || {};
+                const enabled = input.enabled === undefined ? prev.enabled !== false : input.enabled === true;
+                let url = prev.url || '';
+                if (input.url !== undefined && String(input.url).trim() !== '') {
+                    url = String(input.url).trim().replace(/\/+$/, '');
+                    new Client(url, '');
+                } else if (!url && enabled) throw Error('Enter the Kimai URL');
+                await this.db.setSetting('kimai:server', { url, enabled });
+                return { ok: true, enabled, url };
             }
             if (op === 'connect') {
                 const global = await this.db.getSetting('kimai:server');
@@ -963,6 +980,7 @@ class Service {
         this.pending.unref();
     }
     async tick() {
+        if (!(await this.enabled())) return;
         const registry = (await this.db.getSetting('kimai:users')) || { users: [] };
         for (const id of registry.users) {
             if (this.closed) break;
