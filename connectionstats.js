@@ -111,13 +111,15 @@ module.exports.connectionstats = function (parent) {
 
     // ---- active time: input in the Desktop, Terminal and Files views becomes heartbeats ----
     // Which view an input event belongs to, by the element it landed on. Null for anything else.
+    // MeshCentral's DOM is versioned and some views use generic containers instead of the old
+    // exact ids, so match the live container names as well as the legacy ones.
     obj.csKindOf = function (el) {
         try {
             while (el != null && el.nodeType == 1) {
-                var id = el.id || '';
-                if (id == 'Desk' || id == 'DeskParent' || id == 'deskarea3x') return 'desktop';
-                if (id == 'p12' || id == 'Term' || id == 'termTable' || id == 'termarea3xdiv' || id == 'termarea3x' || (el.classList && el.classList.contains('xterm'))) return 'terminal';
-                if (id == 'p13filetable' || id == 'p13') return 'files';
+                var text = [el.id || '', (el.className || ''), (el.getAttribute && el.getAttribute('data-view')) || ''].join(' ').toLowerCase();
+                if (text.indexOf('desk') >= 0 || text.indexOf('desktop') >= 0) return 'desktop';
+                if (text.indexOf('xterm') >= 0 || text.indexOf('terminal') >= 0 || text.indexOf('term') >= 0) return 'terminal';
+                if (text.indexOf('filetable') >= 0 || text.indexOf('file') >= 0 || text.indexOf('p13') >= 0 || text.indexOf('files') >= 0) return 'files';
                 el = el.parentNode;
             }
         } catch (e) { }
