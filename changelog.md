@@ -1,3 +1,8 @@
+## 1.0.1 — 2026-11-08
+
+- Fix active-time heartbeats for Desktop, Terminal and Files sessions when MeshCentral has renamed or restructured the live DOM, so input is recorded instead of showing "no data".
+- Keep the browser-side session classifier aligned with newer MeshCentral layouts without changing the server-side session logic.
+
 ## 0.5.2 — 2026-10-20
 
 - Session table: show or hide columns, choose a height (or drag the table's corner), remembered per viewer.
