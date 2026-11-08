@@ -3,6 +3,7 @@
 - Fix active time showing "no data" for every new Desktop, Terminal and Files session. The browser-side heartbeat setup ran before MeshCentral had delivered the signed-in user's details, concluded the user was not a site admin, and never started. It now waits for the user details, then starts.
 - Fix the Files view never reporting activity: the view classifier called a helper that does not exist in the browser, so input in the file list was ignored.
 - Keep a session's recorded activity when the periodic flush cannot match an open session straight away; it is released only after several consecutive misses, and when a session too short to record is dropped.
+- Measure active time for every signed-in user. Only site admins were reporting activity, so sessions by other users always showed "no data". The Connection Stats tab and Kimai controls remain site-admin only.
 - Sessions saved before this version keep "no data"; active time cannot be reconstructed after the fact.
 
 ## 0.5.3 — 2026-11-08
