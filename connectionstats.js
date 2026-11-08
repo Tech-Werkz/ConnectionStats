@@ -83,19 +83,36 @@ module.exports.connectionstats = function (parent) {
         } catch (e) { return false; }
     };
 
+    // MeshCentral calls this hook from startup() on body load, BEFORE the websocket has delivered
+    // the 'userinfo' message, so userinfo is still null here and csIsAdmin() would be false for
+    // everyone. Wait for userinfo instead of giving up: otherwise the heartbeat listeners are never
+    // installed and every session's active time stays null ("no data").
     obj.onWebUIStartupEnd = function () {
         try {
-            if (!pluginHandler.connectionstats.csIsAdmin()) return;
-            if (window.__csStarted) return; window.__csStarted = true;
-            window.addEventListener('message', function (ev) { pluginHandler.connectionstats.csOnMessage(ev); });
-            window.addEventListener('resize', function () { pluginHandler.connectionstats.csFitFrame(); });
-            var mo = new MutationObserver(function () {
-                var f = document.getElementById('csDeviceFrame');
-                if (f && f.contentWindow) { try { f.contentWindow.postMessage({ cs: 'night', night: pluginHandler.connectionstats.csNight() }, '*'); } catch (e) { } }
-            });
-            mo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-            pluginHandler.connectionstats.csActivityInit();
-            pluginHandler.connectionstats.csKimaiInit();
+            if (window.__csStarted || window.__csStartPoll) return;
+            var tries = 0;
+            var begin = function () {
+                try {
+                    if (typeof userinfo == 'undefined' || userinfo == null) return false;   // not signed in / not loaded yet
+                    if (window.__csStarted) return true;
+                    window.__csStarted = true;                                              // userinfo is known: decide once
+                    if (!pluginHandler.connectionstats.csIsAdmin()) return true;
+                    window.addEventListener('message', function (ev) { pluginHandler.connectionstats.csOnMessage(ev); });
+                    window.addEventListener('resize', function () { pluginHandler.connectionstats.csFitFrame(); });
+                    var mo = new MutationObserver(function () {
+                        var f = document.getElementById('csDeviceFrame');
+                        if (f && f.contentWindow) { try { f.contentWindow.postMessage({ cs: 'night', night: pluginHandler.connectionstats.csNight() }, '*'); } catch (e) { } }
+                    });
+                    mo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+                    pluginHandler.connectionstats.csActivityInit();
+                    pluginHandler.connectionstats.csKimaiInit();
+                    return true;
+                } catch (e) { return true; }
+            };
+            if (begin()) return;
+            window.__csStartPoll = setInterval(function () {
+                if (begin() || ++tries > 900) { clearInterval(window.__csStartPoll); }   // up to ~15 minutes
+            }, 1000);
         } catch (e) { }
     };
 
@@ -111,15 +128,23 @@ module.exports.connectionstats = function (parent) {
 
     // ---- active time: input in the Desktop, Terminal and Files views becomes heartbeats ----
     // Which view an input event belongs to, by the element it landed on. Null for anything else.
-    // MeshCentral's DOM is versioned and some views use generic containers instead of the old
-    // exact ids, so match the live container names as well as the legacy ones.
+    // MeshCentral's DOM is versioned and newer builds use different generic ids/classes for the
+    // same views, so match the live container names as well as the legacy ones.
     obj.csKindOf = function (el) {
         try {
             while (el != null && el.nodeType == 1) {
-                var text = [el.id || '', (el.className || ''), (el.getAttribute && el.getAttribute('data-view')) || ''].join(' ').toLowerCase();
-                if (text.indexOf('desk') >= 0 || text.indexOf('desktop') >= 0) return 'desktop';
-                if (text.indexOf('xterm') >= 0 || text.indexOf('terminal') >= 0 || text.indexOf('term') >= 0) return 'terminal';
-                if (text.indexOf('filetable') >= 0 || text.indexOf('file') >= 0 || text.indexOf('p13') >= 0 || text.indexOf('files') >= 0) return 'files';
+                var id = (el.id || '').toLowerCase();
+                var cls = (typeof el.className == 'string') ? el.className.toLowerCase() : String(el.className || '').toLowerCase();
+                var data = (el.getAttribute && el.getAttribute('data-view')) ? String(el.getAttribute('data-view')).toLowerCase() : '';
+                var text = [id, cls, data].join(' ');
+                if (id == 'desk' || id == 'deskparent' || id == 'deskarea3x' || id.indexOf('desktop') >= 0 || id.indexOf('desk') >= 0 ||
+                    text.indexOf('desktop') >= 0 || text.indexOf('remote-desktop') >= 0 || text.indexOf('screen') >= 0 && text.indexOf('desktop') >= 0) return 'desktop';
+                if (id == 'p12' || id == 'term' || id == 'termtable' || id == 'termarea3xdiv' || id == 'termarea3x' ||
+                    id.indexOf('terminal') >= 0 || id.indexOf('term') >= 0 || text.indexOf('xterm') >= 0 ||
+                    text.indexOf('terminal') >= 0 || text.indexOf('tty') >= 0 || text.indexOf('shell') >= 0 || text.indexOf('console') >= 0) return 'terminal';
+                if (id == 'p13filetable' || id == 'p13' || id.indexOf('filetable') >= 0 || id.indexOf('file') >= 0 ||
+                    cls.indexOf('filetable') >= 0 || cls.indexOf('file-list') >= 0 || cls.indexOf('filelist') >= 0 || cls.indexOf('sftp') >= 0 || data.indexOf('file') >= 0 ||
+                    text.indexOf('filetable') >= 0 || text.indexOf('sftp') >= 0 || text.indexOf('filebrowser') >= 0 || text.indexOf('file-list') >= 0 || text.indexOf('filelist') >= 0 || text.indexOf('files') >= 0) return 'files';
                 el = el.parentNode;
             }
         } catch (e) { }
@@ -520,6 +545,7 @@ module.exports.connectionstats = function (parent) {
                 if (obj.settings.recordTypes.indexOf(done.type) < 0) return;
                 if (done.seconds < obj.settings.minSeconds) {
                     // too short to be a session (a misclick): drop the open record if one was written
+                    obj.tracker.forget(done._id);
                     wrote(sessionWrite(done._id, function () { return obj.db.removeSession(done._id); })).catch(function () { });
                     return;
                 }
@@ -546,14 +572,23 @@ module.exports.connectionstats = function (parent) {
         obj.tracker.forget(doc._id);
     };
 
+    obj._flushMiss = {};
     obj.flushActivity = function () {
         try {
             // A heartbeat's idle window keeps accruing without another input event.
             // Recalculate observed open sessions even when no new beat made them dirty.
             obj.tracker.takeDirty();
             Object.keys(obj.tracker.beats).forEach(function (sid) {
-                var open = obj.pairer.open[sid.substring(2)];
-                if (open == null) { obj.tracker.forget(sid); return; }
+                var open = obj.pairer.open[sid] || obj.pairer.open[sid.substring(2)];
+                if (open == null) {
+                    // Do not drop heartbeats on one miss: the end event (finalizeActive) normally
+                    // consumes them. Only discard entries that stay orphaned for several flushes.
+                    var miss = (obj._flushMiss[sid] = (obj._flushMiss[sid] || 0) + 1);
+                    if (miss == 1) console.log('CONNSTATS: activity entry ' + sid + ' has no open session (pairer keys look like: ' + Object.keys(obj.pairer.open).slice(0, 2).join(', ') + ')');
+                    if (miss >= 5) { obj.tracker.forget(sid); delete obj._flushMiss[sid]; }
+                    return;
+                }
+                delete obj._flushMiss[sid];
                 var patch = { activeIntervals: obj.tracker.intervalsFor(sid, open.start, null), active: obj.tracker.activeFor(sid, open.start, null), lastbeat: obj.tracker.lastBeat(sid) };
                 if (!open._activityWriteFailed && open.active === patch.active && open.lastbeat === patch.lastbeat && Array.isArray(open.activeIntervals)) return;
                 open.activeIntervals = patch.activeIntervals;
