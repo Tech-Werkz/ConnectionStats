@@ -74,8 +74,9 @@ module.exports.connectionstats = function (parent) {
 
     // Runs once when the web UI has loaded: keep embedded pages in step with night mode and
     // listen for their size reports.
-    // Browser side: the plugin is for site administrators only, so nothing is registered for others.
-    // (The server enforces the same rule; this only keeps the tab and toolbar chips from showing.)
+    // Browser side: the device tab, toolbar chips and Kimai controls are for site administrators only,
+    // so nothing of that is registered for others. Activity heartbeats are not part of that: they run
+    // for every signed-in user (see onWebUIStartupEnd).
     obj.csIsAdmin = function () {
         try {
             var s = (typeof userinfo != 'undefined' && userinfo) ? userinfo.siteadmin : null;
@@ -96,6 +97,10 @@ module.exports.connectionstats = function (parent) {
                     if (typeof userinfo == 'undefined' || userinfo == null) return false;   // not signed in / not loaded yet
                     if (window.__csStarted) return true;
                     window.__csStarted = true;                                              // userinfo is known: decide once
+                    // Active time is measured for every signed-in user, not only admins: the server
+                    // matches a heartbeat to the sender's own open session by user id.
+                    pluginHandler.connectionstats.csActivityInit();
+                    // The tab, its frame and the Kimai controls stay site-admin only.
                     if (!pluginHandler.connectionstats.csIsAdmin()) return true;
                     window.addEventListener('message', function (ev) { pluginHandler.connectionstats.csOnMessage(ev); });
                     window.addEventListener('resize', function () { pluginHandler.connectionstats.csFitFrame(); });
@@ -104,7 +109,6 @@ module.exports.connectionstats = function (parent) {
                         if (f && f.contentWindow) { try { f.contentWindow.postMessage({ cs: 'night', night: pluginHandler.connectionstats.csNight() }, '*'); } catch (e) { } }
                     });
                     mo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-                    pluginHandler.connectionstats.csActivityInit();
                     pluginHandler.connectionstats.csKimaiInit();
                     return true;
                 } catch (e) { return true; }
